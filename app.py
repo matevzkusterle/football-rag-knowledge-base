@@ -1,8 +1,8 @@
 import streamlit as st
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
-import chromadb
-from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 # ─────────────────────────────────────────────
 #  PAGE CONFIG
@@ -222,16 +222,15 @@ TOPICS = [
 ]
 
 # ─────────────────────────────────────────────
-#  VECTOR DB  (cached so it only builds once)
+#  SEARCH INDEX  (cached so it only builds once)
 # ─────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
-def build_vectorstore(chunk_size: int, chunk_overlap: int):
+def build_index(chunk_size: int, chunk_overlap: int):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
-
     all_chunks = []
     all_metadatas = []
     for i, text in enumerate(DOCUMENTS):
@@ -240,26 +239,16 @@ def build_vectorstore(chunk_size: int, chunk_overlap: int):
             all_chunks.append(chunk)
             all_metadatas.append({"topic": TOPICS[i], "doc_index": i})
 
-    ef = DefaultEmbeddingFunction()
-    client = chromadb.Client()
-    collection = client.get_or_create_collection(
-        name=f"football_{chunk_size}_{chunk_overlap}",
-        embedding_function=ef,
-    )
-    collection.add(
-        documents=all_chunks,
-        metadatas=all_metadatas,
-        ids=[str(i) for i in range(len(all_chunks))],
-    )
-    return collection, len(all_chunks)
+    vectorizer = TfidfVectorizer()
+    matrix = vectorizer.fit_transform(all_chunks)
+    return vectorizer, matrix, all_chunks, all_metadatas, len(all_chunks)
 
 
-def search(collection, query: str, n_results: int):
-    results = collection.query(query_texts=[query], n_results=n_results)
-    docs = results["documents"][0]
-    metas = results["metadatas"][0]
-    distances = results["distances"][0]
-    return list(zip(docs, metas, distances))
+def search(vectorizer, matrix, all_chunks, all_metadatas, query: str, n_results: int):
+    query_vec = vectorizer.transform([query])
+    scores = cosine_similarity(query_vec, matrix)[0]
+    top_indices = np.argsort(scores)[::-1][:n_results]
+    return [(all_chunks[i], all_metadatas[i], float(scores[i])) for i in top_indices]
 
 
 # ─────────────────────────────────────────────
@@ -290,16 +279,16 @@ with st.sidebar:
     n_results = st.slider("Results to show", 1, 8, 4)
     st.markdown("---")
     st.markdown(
-        "<div style='color:#8b949e;font-size:0.78rem;'>Model: ChromaDB Default Embeddings<br>"
-        "DB: ChromaDB · LangChain</div>",
+        "<div style='color:#8b949e;font-size:0.78rem;'>Model: TF-IDF + Cosine Similarity<br>"
+        "Library: scikit-learn</div>",
         unsafe_allow_html=True,
     )
 
 # ─────────────────────────────────────────────
-#  BUILD / LOAD DB
+#  BUILD INDEX
 # ─────────────────────────────────────────────
-with st.spinner("🔧 Building vector index…"):
-    collection, total_chunks = build_vectorstore(chunk_size, chunk_overlap)
+with st.spinner("🔧 Building search index…"):
+    vectorizer, matrix, all_chunks, all_metadatas, total_chunks = build_index(chunk_size, chunk_overlap)
 
 # ═════════════════════════════════════════════
 #  PAGE: HOME
@@ -329,9 +318,9 @@ if page == "🏠 Home":
 <div class="info-box">
 <ol style="color:#c9d1d9;line-height:2;margin:0;padding-left:20px;">
   <li><b style="color:#58a6ff;">Chunking</b> — Each document is split into overlapping text chunks using <code>RecursiveCharacterTextSplitter</code>.</li>
-  <li><b style="color:#58a6ff;">Embedding</b> — Chunks are converted into vectors using ChromaDB's built-in embedding function.</li>
-  <li><b style="color:#58a6ff;">Indexing</b> — Vectors are stored in an in-memory <strong>ChromaDB</strong> collection.</li>
-  <li><b style="color:#58a6ff;">Retrieval</b> — Your query is embedded and the closest chunks are returned by cosine similarity.</li>
+  <li><b style="color:#58a6ff;">Vectorising</b> — Chunks are converted into TF-IDF vectors which capture word importance across the corpus.</li>
+  <li><b style="color:#58a6ff;">Indexing</b> — Vectors are stored in memory using scikit-learn.</li>
+  <li><b style="color:#58a6ff;">Retrieval</b> — Your query is vectorised and the closest chunks are returned by cosine similarity.</li>
 </ol>
 </div>
 """, unsafe_allow_html=True)
@@ -371,24 +360,23 @@ elif page == "🔍 Search":
         label_visibility="collapsed",
     )
 
-    col_btn, col_clear = st.columns([1, 5])
+    col_btn, _ = st.columns([1, 5])
     search_clicked = col_btn.button("⚽ Search")
 
     if search_clicked and query.strip():
         with st.spinner("Searching the knowledge base…"):
-            results = search(collection, query.strip(), n_results)
+            results = search(vectorizer, matrix, all_chunks, all_metadatas, query.strip(), n_results)
 
         if results:
             st.markdown(f"### Found {len(results)} relevant passage(s) for: *\"{query}\"*")
             st.markdown("")
-            for rank, (text, meta, distance) in enumerate(results, 1):
+            for rank, (text, meta, score) in enumerate(results, 1):
                 topic = meta.get("topic", "Unknown")
-                relevance = max(0.0, 1.0 - distance)
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
                     f'<div class="result-text">{text}</div>'
-                    f'<span class="score-badge">Relevance: {relevance:.2%}</span>'
+                    f'<span class="score-badge">Relevance: {score:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -408,16 +396,15 @@ elif page == "🔍 Search":
     for i, q in enumerate(quick):
         if cols[i % 3].button(q, key=f"quick_{i}"):
             with st.spinner("Searching…"):
-                results = search(collection, q, n_results)
+                results = search(vectorizer, matrix, all_chunks, all_metadatas, q, n_results)
             st.markdown(f"### Results for: *\"{q}\"*")
-            for rank, (text, meta, distance) in enumerate(results, 1):
+            for rank, (text, meta, score) in enumerate(results, 1):
                 topic = meta.get("topic", "Unknown")
-                relevance = max(0.0, 1.0 - distance)
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
                     f'<div class="result-text">{text}</div>'
-                    f'<span class="score-badge">Relevance: {relevance:.2%}</span>'
+                    f'<span class="score-badge">Relevance: {score:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -477,15 +464,15 @@ elif page == "📊 Stats & Info":
         with st.expander(f"#{i:02d}  {topic}  —  {word_count} words"):
             st.write(doc[:600] + ("…" if len(doc) > 600 else ""))
 
-    st.markdown("### 🧠 Embedding Model")
+    st.markdown("### 🧠 Search Method")
     st.markdown("""
 <div class="info-box">
 <ul style="color:#c9d1d9;line-height:2;margin:0;padding-left:20px;">
-  <li><b style="color:#58a6ff;">Model:</b> ChromaDB Default Embedding Function (all-MiniLM-L6-v2 via onnxruntime)</li>
-  <li><b style="color:#58a6ff;">Dimensions:</b> 384</li>
-  <li><b style="color:#58a6ff;">Runtime:</b> ONNX (no PyTorch needed — lightweight & fast)</li>
-  <li><b style="color:#58a6ff;">Speed:</b> Fast CPU inference, optimised for free-tier deployment</li>
-  <li><b style="color:#58a6ff;">Similarity metric:</b> Cosine distance (via ChromaDB)</li>
+  <li><b style="color:#58a6ff;">Method:</b> TF-IDF (Term Frequency–Inverse Document Frequency)</li>
+  <li><b style="color:#58a6ff;">Similarity:</b> Cosine similarity between query and chunk vectors</li>
+  <li><b style="color:#58a6ff;">Library:</b> scikit-learn (no model download required)</li>
+  <li><b style="color:#58a6ff;">Memory:</b> Extremely lightweight — runs on Render free tier easily</li>
+  <li><b style="color:#58a6ff;">Trade-off:</b> Keyword-based rather than semantic — great for factual queries</li>
 </ul>
 </div>
 """, unsafe_allow_html=True)
