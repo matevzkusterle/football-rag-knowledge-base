@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-#  CUSTOM CSS  –  dark stadium aesthetic
+#  CUSTOM CSS
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -41,15 +41,26 @@ h2 { font-family: 'Bebas Neue', sans-serif !important; font-size: 2rem !importan
 h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !important;
      letter-spacing: 1px; color: #d2a679 !important; }
 
-[data-testid="metric-container"] {
+.stat-card {
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 10px;
-    padding: 18px;
+    padding: 18px 20px;
+    text-align: center;
 }
-[data-testid="stMetricValue"] { color: #58a6ff !important; font-family: 'Bebas Neue', sans-serif !important;
-    font-size: 2.2rem !important; }
-[data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 0.8rem !important; text-transform: uppercase; }
+.stat-card .stat-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.2rem;
+    color: #58a6ff;
+    line-height: 1.1;
+}
+.stat-card .stat-label {
+    color: #8b949e;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+}
 
 .stTextInput > div > div > input {
     background: #161b22 !important;
@@ -222,7 +233,7 @@ TOPICS = [
 ]
 
 # ─────────────────────────────────────────────
-#  SEARCH INDEX  (cached so it only builds once)
+#  SEARCH INDEX
 # ─────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def build_index(chunk_size: int, chunk_overlap: int):
@@ -303,11 +314,15 @@ if page == "🏠 Home":
     )
     st.markdown("---")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📄 Documents", len(DOCUMENTS))
-    col2.metric("🧩 Chunks", total_chunks)
-    col3.metric("📐 Chunk Size", f"{chunk_size} chars")
-    col4.metric("🔗 Overlap", f"{chunk_overlap} chars")
+    # ── Stat cards (pure HTML, no st.metric) ──
+    st.markdown(f"""
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+      <div class="stat-card"><div class="stat-value">{len(DOCUMENTS)}</div><div class="stat-label">📄 Documents</div></div>
+      <div class="stat-card"><div class="stat-value">{total_chunks}</div><div class="stat-label">🧩 Chunks</div></div>
+      <div class="stat-card"><div class="stat-value">{chunk_size}</div><div class="stat-label">📐 Chunk Size (chars)</div></div>
+      <div class="stat-card"><div class="stat-value">{chunk_overlap}</div><div class="stat-label">🔗 Overlap (chars)</div></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("### 📚 Topics Covered")
     pills_html = "".join(f'<span class="topic-pill">{t}</span>' for t in TOPICS)
