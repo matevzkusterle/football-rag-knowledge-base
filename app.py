@@ -1,9 +1,8 @@
 import streamlit as st
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-import os
+import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 # ─────────────────────────────────────────────
 #  PAGE CONFIG
@@ -22,7 +21,6 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;600&display=swap');
 
-/* ── global ── */
 html, body, [class*="css"] {
     background-color: #0d1117;
     color: #e6edf3;
@@ -30,14 +28,12 @@ html, body, [class*="css"] {
 }
 .stApp { background-color: #0d1117; }
 
-/* ── sidebar ── */
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
     border-right: 1px solid #21262d;
 }
 section[data-testid="stSidebar"] * { color: #e6edf3 !important; }
 
-/* ── headings ── */
 h1 { font-family: 'Bebas Neue', sans-serif !important; font-size: 3.2rem !important;
      letter-spacing: 3px; color: #58a6ff !important; margin-bottom: 0 !important; }
 h2 { font-family: 'Bebas Neue', sans-serif !important; font-size: 2rem !important;
@@ -45,7 +41,6 @@ h2 { font-family: 'Bebas Neue', sans-serif !important; font-size: 2rem !importan
 h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !important;
      letter-spacing: 1px; color: #d2a679 !important; }
 
-/* ── metric cards ── */
 [data-testid="metric-container"] {
     background: #161b22;
     border: 1px solid #30363d;
@@ -56,7 +51,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     font-size: 2.2rem !important; }
 [data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 0.8rem !important; text-transform: uppercase; }
 
-/* ── search input ── */
 .stTextInput > div > div > input {
     background: #161b22 !important;
     border: 1.5px solid #30363d !important;
@@ -70,7 +64,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     box-shadow: 0 0 0 3px rgba(88,166,255,0.15) !important;
 }
 
-/* ── buttons ── */
 .stButton > button {
     background: linear-gradient(135deg, #1f6feb, #388bfd);
     color: #ffffff;
@@ -88,7 +81,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     box-shadow: 0 6px 20px rgba(88,166,255,0.35);
 }
 
-/* ── result cards ── */
 .result-card {
     background: #161b22;
     border: 1px solid #21262d;
@@ -108,7 +100,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
 }
 .result-text { color: #c9d1d9; line-height: 1.7; font-size: 0.95rem; }
 
-/* ── score badge ── */
 .score-badge {
     display: inline-block;
     background: rgba(88,166,255,0.15);
@@ -121,7 +112,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     margin-top: 10px;
 }
 
-/* ── info box ── */
 .info-box {
     background: #1c2128;
     border: 1px solid #30363d;
@@ -130,7 +120,6 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     margin: 16px 0;
 }
 
-/* ── tag pill ── */
 .topic-pill {
     display: inline-block;
     background: rgba(210,166,121,0.15);
@@ -142,13 +131,8 @@ h3 { font-family: 'Bebas Neue', sans-serif !important; font-size: 1.4rem !import
     margin: 3px;
 }
 
-/* ── divider ── */
 hr { border-color: #21262d !important; }
-
-/* ── selectbox / slider ── */
 .stSelectbox > div > div, .stSlider { color: #e6edf3 !important; }
-
-/* ── expander ── */
 .streamlit-expanderHeader { color: #79c0ff !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -247,25 +231,39 @@ def build_vectorstore(chunk_size: int, chunk_overlap: int):
         chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
-    docs = []
+
+    all_chunks = []
+    all_metadatas = []
     for i, text in enumerate(DOCUMENTS):
         chunks = splitter.split_text(text)
         for chunk in chunks:
-            docs.append(Document(
-                page_content=chunk,
-                metadata={"topic": TOPICS[i], "doc_index": i}
-            ))
+            all_chunks.append(chunk)
+            all_metadatas.append({"topic": TOPICS[i], "doc_index": i})
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
+    ef = DefaultEmbeddingFunction()
+    client = chromadb.Client()
+    collection = client.get_or_create_collection(
+        name=f"football_{chunk_size}_{chunk_overlap}",
+        embedding_function=ef,
     )
-    persist_dir = f"./chroma_db_{chunk_size}_{chunk_overlap}"
-    vectorstore = Chroma.from_documents(docs, embeddings, persist_directory=persist_dir)
-    return vectorstore, len(docs)
+    collection.add(
+        documents=all_chunks,
+        metadatas=all_metadatas,
+        ids=[str(i) for i in range(len(all_chunks))],
+    )
+    return collection, len(all_chunks)
+
+
+def search(collection, query: str, n_results: int):
+    results = collection.query(query_texts=[query], n_results=n_results)
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    distances = results["distances"][0]
+    return list(zip(docs, metas, distances))
+
 
 # ─────────────────────────────────────────────
-#  SIDEBAR  –  navigation + settings
+#  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚽ FOOTBALL KB")
@@ -292,7 +290,7 @@ with st.sidebar:
     n_results = st.slider("Results to show", 1, 8, 4)
     st.markdown("---")
     st.markdown(
-        "<div style='color:#8b949e;font-size:0.78rem;'>Model: all-MiniLM-L6-v2<br>"
+        "<div style='color:#8b949e;font-size:0.78rem;'>Model: ChromaDB Default Embeddings<br>"
         "DB: ChromaDB · LangChain</div>",
         unsafe_allow_html=True,
     )
@@ -300,8 +298,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 #  BUILD / LOAD DB
 # ─────────────────────────────────────────────
-with st.spinner("🔧 Building vector index… (first run downloads the model ~90 MB)"):
-    vectorstore, total_chunks = build_vectorstore(chunk_size, chunk_overlap)
+with st.spinner("🔧 Building vector index…"):
+    collection, total_chunks = build_vectorstore(chunk_size, chunk_overlap)
 
 # ═════════════════════════════════════════════
 #  PAGE: HOME
@@ -324,18 +322,15 @@ if page == "🏠 Home":
 
     st.markdown("### 📚 Topics Covered")
     pills_html = "".join(f'<span class="topic-pill">{t}</span>' for t in TOPICS)
-    st.markdown(
-        f'<div class="info-box">{pills_html}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="info-box">{pills_html}</div>', unsafe_allow_html=True)
 
     st.markdown("### 🚀 How It Works")
     st.markdown("""
 <div class="info-box">
 <ol style="color:#c9d1d9;line-height:2;margin:0;padding-left:20px;">
   <li><b style="color:#58a6ff;">Chunking</b> — Each document is split into overlapping text chunks using <code>RecursiveCharacterTextSplitter</code>.</li>
-  <li><b style="color:#58a6ff;">Embedding</b> — Chunks are converted into 384-dimensional vectors with <em>all-MiniLM-L6-v2</em>.</li>
-  <li><b style="color:#58a6ff;">Indexing</b> — Vectors are stored in a local <strong>ChromaDB</strong> collection.</li>
+  <li><b style="color:#58a6ff;">Embedding</b> — Chunks are converted into vectors using ChromaDB's built-in embedding function.</li>
+  <li><b style="color:#58a6ff;">Indexing</b> — Vectors are stored in an in-memory <strong>ChromaDB</strong> collection.</li>
   <li><b style="color:#58a6ff;">Retrieval</b> — Your query is embedded and the closest chunks are returned by cosine similarity.</li>
 </ol>
 </div>
@@ -381,18 +376,18 @@ elif page == "🔍 Search":
 
     if search_clicked and query.strip():
         with st.spinner("Searching the knowledge base…"):
-            results = vectorstore.similarity_search_with_score(query.strip(), k=n_results)
+            results = search(collection, query.strip(), n_results)
 
         if results:
             st.markdown(f"### Found {len(results)} relevant passage(s) for: *\"{query}\"*")
             st.markdown("")
-            for rank, (doc, score) in enumerate(results, 1):
-                topic = doc.metadata.get("topic", "Unknown")
-                relevance = max(0.0, 1.0 - score)   # convert distance → relevance
+            for rank, (text, meta, distance) in enumerate(results, 1):
+                topic = meta.get("topic", "Unknown")
+                relevance = max(0.0, 1.0 - distance)
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
-                    f'<div class="result-text">{doc.page_content}</div>'
+                    f'<div class="result-text">{text}</div>'
                     f'<span class="score-badge">Relevance: {relevance:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -403,7 +398,6 @@ elif page == "🔍 Search":
     elif search_clicked:
         st.warning("Please enter a query first.")
 
-    # Quick-fire example buttons
     st.markdown("---")
     st.markdown("#### ⚡ Quick searches")
     quick = [
@@ -414,15 +408,15 @@ elif page == "🔍 Search":
     for i, q in enumerate(quick):
         if cols[i % 3].button(q, key=f"quick_{i}"):
             with st.spinner("Searching…"):
-                results = vectorstore.similarity_search_with_score(q, k=n_results)
+                results = search(collection, q, n_results)
             st.markdown(f"### Results for: *\"{q}\"*")
-            for rank, (doc, score) in enumerate(results, 1):
-                topic = doc.metadata.get("topic", "Unknown")
-                relevance = max(0.0, 1.0 - score)
+            for rank, (text, meta, distance) in enumerate(results, 1):
+                topic = meta.get("topic", "Unknown")
+                relevance = max(0.0, 1.0 - distance)
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
-                    f'<div class="result-text">{doc.page_content}</div>'
+                    f'<div class="result-text">{text}</div>'
                     f'<span class="score-badge">Relevance: {relevance:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -435,7 +429,6 @@ elif page == "📊 Stats & Info":
     st.markdown("<h1>📊 STATS & INFO</h1>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Chunking comparison table
     st.markdown("### 🔬 Chunking Strategy Comparison")
     st.markdown("""
 <div class="info-box">
@@ -488,10 +481,10 @@ elif page == "📊 Stats & Info":
     st.markdown("""
 <div class="info-box">
 <ul style="color:#c9d1d9;line-height:2;margin:0;padding-left:20px;">
-  <li><b style="color:#58a6ff;">Model:</b> sentence-transformers/all-MiniLM-L6-v2</li>
+  <li><b style="color:#58a6ff;">Model:</b> ChromaDB Default Embedding Function (all-MiniLM-L6-v2 via onnxruntime)</li>
   <li><b style="color:#58a6ff;">Dimensions:</b> 384</li>
-  <li><b style="color:#58a6ff;">Size:</b> ~90 MB (cached after first download)</li>
-  <li><b style="color:#58a6ff;">Speed:</b> Fast CPU inference, good for free-tier deployment</li>
+  <li><b style="color:#58a6ff;">Runtime:</b> ONNX (no PyTorch needed — lightweight & fast)</li>
+  <li><b style="color:#58a6ff;">Speed:</b> Fast CPU inference, optimised for free-tier deployment</li>
   <li><b style="color:#58a6ff;">Similarity metric:</b> Cosine distance (via ChromaDB)</li>
 </ul>
 </div>

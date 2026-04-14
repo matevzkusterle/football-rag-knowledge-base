@@ -3,5 +3,3 @@ langchain
 langchain-community
 langchain-text-splitters
 chromadb
-sentence-transformers
-torch --extra-index-url https://download.pytorch.org/whl/cpu
