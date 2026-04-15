@@ -272,6 +272,11 @@ def search(vectorizer, matrix, all_chunks, all_metadatas, query: str, n_results:
     return [(all_chunks[i], all_metadatas[i], float(scores[i])) for i in top_indices]
 
 
+def clean_chunk(text: str) -> str:
+    import re
+    return re.sub(r'^[\s.,;:!?]+', '', text)
+
+
 # ─────────────────────────────────────────────
 #  SIDEBAR
 # ─────────────────────────────────────────────
@@ -400,7 +405,7 @@ elif page == "🔍 Search":
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
-                    f'<div class="result-text">{text}</div>'
+                    f'<div class="result-text">{clean_chunk(text)}</div>'
                     f'<span class="score-badge">Relevance: {score:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -428,7 +433,7 @@ elif page == "🔍 Search":
                 st.markdown(
                     f'<div class="result-card">'
                     f'<div class="result-rank">#{rank} — {topic}</div>'
-                    f'<div class="result-text">{text}</div>'
+                    f'<div class="result-text">{clean_chunk(text)}</div>'
                     f'<span class="score-badge">Relevance: {score:.2%}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
